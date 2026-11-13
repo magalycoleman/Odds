@@ -87,7 +87,7 @@ for r in json.load(open('lines.json'))['records']:
              recv=c.get('fldyGANkhe2AnjFcf'), missing=c.get('fldojp5BtLP3Uql5L') or 0,
              bshort=c.get('fldXdpsRKmfDTJJJt') or 0, real=c.get('fldd4jmkfqYZZENmF'),
              closed=bool(c.get('fldDMztpZJHVc97zm')), compras=sel(c.get('fldJrpd9qY9yrRibW')),
-             shipped=c.get('fldtIooJxaDvitRKo'), customs=c.get('fld2BrXOnG0EMJ1ox'), tbi=c.get('fldogDyjom6aPEsiP') or '')
+             shipped=c.get('fldtIooJxaDvitRKo'), customs=c.get('fld2BrXOnG0EMJ1ox'), tbi=c.get('fldogDyjom6aPEsiP') or '', name=(c.get('fld7XX9NBPqRiAY6W') or c.get('fldogDyjom6aPEsiP') or '').strip())
     if isinstance(L['eta'], str) and L['eta'][:2] not in ('20',):
         L['eta'] = None
     L['onhand'] = inv.get(f"{L['sap']} | {L['grid']}") if L['grid'] else inv.get(f"{L['sap']} | NO GRID")
@@ -129,15 +129,15 @@ def trim_status(style, color, start, need_by):
                 short = (L['need'] or 0) - (L['onhand'] or 0)
             if short <= 0:
                 continue
-            txt = f"{L['desc']} · {L['sap']} · faltan {int(round(short)):,} {L['uom']}".strip()
+            txt = f"{L['name']} · faltan {int(round(short)):,} {L['uom']}".strip()
         elif L['eta']:
             e = d(L['eta'])
             if need_by and e > need_by:
-                st = 'Tarde'; txt = f"{L['desc']} · {L['sap']} · llega {fmt(e)}"
+                st = 'Tarde'; txt = f"{L['name']} · llega {fmt(e)}"
             else:
                 st = 'En camino'; txt = None
         else:
-            st = 'Sin fecha'; txt = f"{L['desc']} · {L['sap']} · sin fecha de llegada"
+            st = 'Sin fecha'; txt = f"{L['name']} · sin fecha de llegada"
         if RANK[st] > RANK[worst]:
             worst = st
         if txt and st in ('Falta', 'Tarde', 'Sin fecha'):
@@ -241,7 +241,8 @@ for po, ls in tp.items():
     avios_po.append(dict(po=po, via=' / '.join({'Air': 'Aéreo', 'Sea': 'Marítimo'}.get(m, m) for m in modes),
                          eta=eta.isoformat() if eta else '', estado=est, lineas=len(open_),
                          compras=', '.join(sorted({L['compras'] for L in open_ if L['compras']})),
-                         detalle=' | '.join(sorted({f"{L['desc']} · {L['sap']}" for L in open_}))[:400]))
+                         detalle=' | '.join(sorted({L['name'] for L in open_}))[:400],
+                         ref=' | '.join(sorted({f"{L['desc']} · {L['sap']}" for L in open_}))[:400]))
 avios_po.sort(key=lambda a: (a['eta'] or '9999', a['po']))
 
 for name, data in [('plan_pos', plan), ('plan_contenedores', contenedores), ('plan_lineas', cont_lineas), ('plan_avios', avios_po)]:
