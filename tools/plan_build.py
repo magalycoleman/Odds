@@ -1,6 +1,10 @@
 import json, datetime as dt, collections, re, sys
 
-TODAY = dt.date(2026, 11, 12)
+# Today's date: pass it as the first argument (YYYY-MM-DD, Honduras time); otherwise the computer's date.
+TODAY = dt.date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else dt.date.today()
+# Plan tab shows only the current month (Maggie, November 14, 2026): POs whose plan date is in this month,
+# plus older POs not shipped yet (they show as late). The shipping plan has everything further out.
+MONTH_END = (TODAY.replace(day=28) + dt.timedelta(days=4)).replace(day=1) - dt.timedelta(days=1)
 MON = TODAY - dt.timedelta(days=TODAY.weekday())
 MES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
 
@@ -66,6 +70,29 @@ for r in json.load(open('fbuy.json'))['records']:
     c = r['cellValuesByFieldId']
     fb[r['id']] = c
 
+# ---------- Trim Library names (Matrix): SAP code -> Trim Name, care code added when missing ----------
+trimname = {}
+try:
+    for r in json.load(open('trimlib.json'))['records']:
+        c = r['cellValuesByFieldId']
+        sap, nm = (c.get('fldfVHjTRQfwKJV8x') or '').strip(), (c.get('fldGnHA6z6KykiL9T') or '').strip()
+        if not sap.isdigit() or not nm:
+            continue
+        cat = sel(c.get('fldWNAWJRzBKvw0ws')) or ''; cc = (c.get('fldDOEUUCt8FwWOVR') or '').strip()
+        if 'Care' in cat and cc and cc not in nm:
+            nm = nm.replace(' | Care', f' ({cc}) | Care')
+        if sap not in trimname or c.get('fldkB0EOMnmYl7lFM'):
+            trimname[sap] = nm
+except FileNotFoundError:
+    print('WARNING: trimlib.json missing - trim names fall back to the Trims base description')
+
+def tname(L):
+    if L['sap'] in trimname:
+        return trimname[L['sap']]
+    if L['sap'].startswith('2'):
+        return f"Tela {L['desc'] or L['name']}"
+    return L['name'] or L['desc']
+
 # ---------- trims ----------
 inv = {}
 for r in json.load(open('inv.json'))['records']:
@@ -129,27 +156,27 @@ def trim_status(style, color, start, need_by):
                 short = (L['need'] or 0) - (L['onhand'] or 0)
             if short <= 0:
                 continue
-            txt = f"{L['name']} · faltan {int(round(short)):,} {L['uom']}".strip()
+            txt = f"{tname(L)} | faltan {int(round(short)):,} {L['uom']}".strip()
         elif L['eta']:
             e = d(L['eta'])
             if need_by and e > need_by:
-                st = 'Tarde'; txt = f"{L['name']} · llega {fmt(e)}"
+                st = 'Tarde'; txt = f"{tname(L)} | llega {fmt(e)}"
             else:
                 st = 'En camino'; txt = None
         else:
-            st = 'Sin fecha'; txt = f"{L['name']} · sin fecha de llegada"
+            st = 'Sin fecha'; txt = f"{tname(L)} | sin fecha de llegada"
         if RANK[st] > RANK[worst]:
             worst = st
         if txt and st in ('Falta', 'Tarde', 'Sin fecha'):
             probs.append((RANK[st], txt))
     probs.sort(key=lambda x: -x[0])
-    tip = [t for _, t in probs]
-    if len(tip) > 6:
-        tip = tip[:6] + [f"y {len(tip) - 6} más"]
-    return dict(estado=worst, tip=' | '.join(tip), compras=s['lines'] and lines[s['lines'][0]]['compras'])
+    # Every missing trim on its own line (newline-separated, because Trim Names contain ' | ')
+    tip = list(dict.fromkeys(t for _, t in probs))
+    return dict(estado=worst, tip='\n'.join(tip), compras=s['lines'] and lines[s['lines'][0]]['compras'], line_ids=s['lines'])
 
 # ---------- PO rows ----------
 plan = []
+used_lines = set()
 for r in wip:
     c = r['cellValuesByFieldId']
     status = sel(c.get('fldH8umxRFCfP6Iio'))
@@ -159,7 +186,7 @@ for r in wip:
     maru = d(c.get('fldHnMdIBYDEdxBX0'))
     xf = d(c.get('fldODhCKQl5k1d4I8'))
     pdate = maru or xf
-    if not pdate:
+    if not pdate or pdate > MONTH_END:
         continue
     style = c.get('fldOmgxSUkAvWsSjl'); color = sel(c.get('fldS2kAkKZtZwOLfy'))
     start = d(c.get('fldoqvCqeYOq5VTT8'))
@@ -177,6 +204,8 @@ for r in wip:
     else:
         tela = 'Sin contenedor'; tela_tip = 'Todavía no tiene contenedor asignado'; cidx = -2
     ts = trim_status(style, color, start, need_by)
+    if ts:
+        used_lines.update(ts['line_ids'])
     wk = pdate - dt.timedelta(days=pdate.weekday())
     plan.append(dict(
         po=c.get('fldaW3eA1EiCnWzwq'), of=c.get('fld1yOntZ6nlM6Dv8') or '', programa=program, estilo=style, color=color,
@@ -194,7 +223,10 @@ po_by_sc = collections.defaultdict(list)
 for p in plan:
     po_by_sc[(p['estilo'], (p['color'] or '').lower())].append(p)
 contenedores, cont_lineas = [], []
+plan_conts = {p['contenedor'] for p in plan if p['contenedor']}
 for k in active:
+    if k['contenedor'] not in plan_conts:
+        continue  # only containers whose fabric goes into this month's POs
     e = eta_plant(k)
     lns = [fb[i] for i in k['lines'] if i in fb]
     tot_u = tot_y = 0
@@ -220,7 +252,7 @@ for k in active:
 # ---------- trim POs ----------
 tp = collections.defaultdict(list)
 for L in lines.values():
-    if L['po'] and not L['closed']:
+    if L['po'] and not L['closed'] and L['id'] in used_lines:
         tp[L['po']].append(L)
 avios_po = []
 for po, ls in tp.items():
@@ -241,8 +273,8 @@ for po, ls in tp.items():
     avios_po.append(dict(po=po, via=' / '.join({'Air': 'Aéreo', 'Sea': 'Marítimo'}.get(m, m) for m in modes),
                          eta=eta.isoformat() if eta else '', estado=est, lineas=len(open_),
                          compras=', '.join(sorted({L['compras'] for L in open_ if L['compras']})),
-                         detalle=' | '.join(sorted({L['name'] for L in open_}))[:400],
-                         ref=' | '.join(sorted({f"{L['desc']} · {L['sap']}" for L in open_}))[:400]))
+                         detalle='\n'.join(sorted({tname(L) for L in open_})),
+                         ref=''))
 avios_po.sort(key=lambda a: (a['eta'] or '9999', a['po']))
 
 for name, data in [('plan_pos', plan), ('plan_contenedores', contenedores), ('plan_lineas', cont_lineas), ('plan_avios', avios_po)]:
