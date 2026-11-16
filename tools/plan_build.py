@@ -102,7 +102,8 @@ styles = {}
 for r in json.load(open('styles.json'))['records']:
     c = r['cellValuesByFieldId']
     styles[r['id']] = dict(style=c.get('fldTf9WE3KjoFfWea'), color=(c.get('fldw1OPMLw2Z8JbGi') or '').strip(),
-                           start=c.get('fld25oR2o9JRIOziK'), program=c.get('fld5wooWq8pBvWb1k'), lines=[])
+                           start=c.get('fld25oR2o9JRIOziK'), program=c.get('fld5wooWq8pBvWb1k'), lines=[],
+                           units=c.get('fld90NYXLcF9ocAX8') or 0)
 lines = {}
 for r in json.load(open('lines.json'))['records']:
     c = r['cellValuesByFieldId']
@@ -114,7 +115,8 @@ for r in json.load(open('lines.json'))['records']:
              recv=c.get('fldyGANkhe2AnjFcf'), missing=c.get('fldojp5BtLP3Uql5L') or 0,
              bshort=c.get('fldXdpsRKmfDTJJJt') or 0, real=c.get('fldd4jmkfqYZZENmF'),
              closed=bool(c.get('fldDMztpZJHVc97zm')), compras=sel(c.get('fldJrpd9qY9yrRibW')),
-             shipped=c.get('fldtIooJxaDvitRKo'), customs=c.get('fld2BrXOnG0EMJ1ox'), tbi=c.get('fldogDyjom6aPEsiP') or '', name=(c.get('fld7XX9NBPqRiAY6W') or c.get('fldogDyjom6aPEsiP') or '').strip())
+             shipped=c.get('fldtIooJxaDvitRKo'), customs=c.get('fld2BrXOnG0EMJ1ox'), tbi=c.get('fldogDyjom6aPEsiP') or '', name=(c.get('fld7XX9NBPqRiAY6W') or c.get('fldogDyjom6aPEsiP') or '').strip(),
+             tobuy=c.get('fldEqwqFiUFuZcYCz') or 0, style_ids=[x['id'] for x in c.get('fldvzHfU5HgxW99jd', [])])
     if isinstance(L['eta'], str) and L['eta'][:2] not in ('20',):
         L['eta'] = None
     L['onhand'] = inv.get(f"{L['sap']} | {L['grid']}") if L['grid'] else inv.get(f"{L['sap']} | NO GRID")
@@ -122,6 +124,11 @@ for r in json.load(open('lines.json'))['records']:
     for s in c.get('fldvzHfU5HgxW99jd', []):
         if s['id'] in styles:
             styles[s['id']]['lines'].append(r['id'])
+
+# Units of all styles that use each trim line (Style Trims Units, from Soan's Compras file, 5% extra included).
+# A PO's share of a shortage = shortage x PO pieces / these units (Maggie, November 16, 2026).
+for L in lines.values():
+    L['units'] = sum(styles[i]['units'] for i in L['style_ids'] if i in styles)
 
 by_sc = collections.defaultdict(list)
 for sid, s in styles.items():
@@ -131,7 +138,7 @@ IGNORE = {'Customer Service to order', 'Warehouse orders it', 'Ordered per relea
           'Covered by another buy', 'Bought monthly'}
 RANK = {'Falta': 4, 'Tarde': 3, 'Sin fecha': 2, 'En camino': 1, 'En casa': 0}
 
-def trim_status(style, color, start, need_by):
+def trim_status(style, color, start, need_by, po_pcs=0):
     cands = by_sc.get((style, (color or '').lower()), [])
     if not cands:
         return None
@@ -156,6 +163,11 @@ def trim_status(style, color, start, need_by):
                 short = (L['need'] or 0) - (L['onhand'] or 0)
             if short <= 0:
                 continue
+            # Only this PO's share (Maggie, November 16, 2026): the line's shortage, capped at the line's need,
+            # times this PO's pieces over the units of every style on the line. Rounded up.
+            if po_pcs and L['units']:
+                short = min(short, L['need'] or short) * po_pcs / L['units']
+                short = max(1, -(-short // 1))
             txt = f"{tname(L)} | faltan {int(round(short)):,} {L['uom']}".strip()
         elif L['eta']:
             e = d(L['eta'])
@@ -203,7 +215,7 @@ for r in wip:
         tela = 'En planta'; tela_tip = f"{cn} · ya llegó a planta"; cidx = -1
     else:
         tela = 'Sin contenedor'; tela_tip = 'Todavía no tiene contenedor asignado'; cidx = -2
-    ts = trim_status(style, color, start, need_by)
+    ts = trim_status(style, color, start, need_by, c.get('fldTh1u7viIjuIP2M') or 0)
     if ts:
         used_lines.update(ts['line_ids'])
     wk = pdate - dt.timedelta(days=pdate.weekday())
@@ -250,6 +262,14 @@ for k in active:
         estilos=len(lns), pos_afectados=sum(1 for p in plan if p['contenedor'] == k['contenedor'])))
 
 # ---------- trim POs ----------
+def det_lines(open_):
+    # One line per trim on the purchase PO: "<Trim Name> | <quantity coming> <unit>" (Maggie, November 16, 2026).
+    # Quantity coming = Purchasing's To Buy (purchase analysis), added up across the PO's open lines of that trim.
+    qty, uom = collections.defaultdict(float), {}
+    for L in open_:
+        n = tname(L); qty[n] += L['tobuy'] or 0; uom.setdefault(n, L['uom'])
+    return [f"{n} | {int(round(qty[n])):,} {uom[n]}".strip() if qty[n] else n for n in sorted(qty)]
+
 tp = collections.defaultdict(list)
 for L in lines.values():
     if L['po'] and not L['closed'] and L['id'] in used_lines:
@@ -273,7 +293,7 @@ for po, ls in tp.items():
     avios_po.append(dict(po=po, via=' / '.join({'Air': 'Aéreo', 'Sea': 'Marítimo'}.get(m, m) for m in modes),
                          eta=eta.isoformat() if eta else '', estado=est, lineas=len(open_),
                          compras=', '.join(sorted({L['compras'] for L in open_ if L['compras']})),
-                         detalle='\n'.join(sorted({tname(L) for L in open_})),
+                         detalle='\n'.join(det_lines(open_)),
                          ref=''))
 avios_po.sort(key=lambda a: (a['eta'] or '9999', a['po']))
 
