@@ -23,6 +23,8 @@ F = {
     "termDays": "fld1JAo7TlKqvbKMm", "shipDate": "fldmwSA8zWqXB2eTv", "dueDate": "fldTQYKTjQlpwmhyb",
     "estimate": "fldj07pMlnOj5RNDB", "amount": "fldmINagLDWBPMOo9", "minAmount": "fldKkKHMyHXk8HnSZ",
     "maxAmount": "fldH60nok6SdCIGoo", "actualXmill": "fld18n9HfBxBYETo1", "intent": "fldBPVIsrT7bEJVUr",
+    # Added November 18, 2026 for Ricardo (cash-flow planning): fabric arrival and the mill's invoice number
+    "etaMonzini": "fldKxCzzKZW3B8iQa", "etaPort": "fldljG7WBJkbohQbV", "millInvoice": "fldAXiJWe8614reny",
 }
 
 # Dashboard look (neutral theme): warm gray page, white cards, amber accent, dashboard series colors
@@ -85,6 +87,7 @@ def load(path):
             "intent": lk(g("intent")), "shipDate": d(g("shipDate")), "actualXmill": g("actualXmill"),
             "dueDate": d(g("dueDate")), "amount": num(g("amount")),
             "minAmount": num(g("minAmount")), "maxAmount": num(g("maxAmount")),
+            "etaMonzini": d(lk(g("etaMonzini"))), "etaPort": d(lk(g("etaPort"))), "millInvoice": lk(g("millInvoice")),
         })
     return rows
 
@@ -286,10 +289,20 @@ def build_pdf(path, today, t, by_mill, by_month, upcoming, colors, chart_png):
     c.showPage(); c.save()
 
 
+def arrival(p, today):
+    """[arrived, estimated, basis] for the Excel (Ricardo, November 18, 2026)."""
+    m, port = p.get("etaMonzini"), p.get("etaPort")
+    if m and m <= today: return [m, None, None]
+    if m: return [None, m, "Monzini (forwarder)"]
+    if port: return [None, port, "Port (no Monzini date yet)"]
+    return [None, None, None]
+
+
 def build_xlsx(path, today, rows, t):
     wb = Workbook(); ws = wb.active; ws.title = "Fabric payments"
     hdr = ["Style | Color", "Mill", "Intent", "Payment terms", "Ship date", "Ship date basis", "Due date",
-           "Amount (Updated Total)", "Amount -3%", "Amount +3%", "Status"]
+           "Amount (Updated Total)", "Amount -3%", "Amount +3%", "Status",
+           "Fabric arrived (Monzini)", "Estimated arrival", "Estimated arrival basis", "Mill invoice #"]
     ws.append(hdr)
     hf = Font(name="Aptos Display", bold=True); fill = PatternFill("solid", fgColor="EDEDED")
     for cell in ws[1]: cell.font = hf; cell.fill = fill; cell.alignment = Alignment(vertical="center")
@@ -299,11 +312,11 @@ def build_xlsx(path, today, rows, t):
         ws.append([p["style"], p["mill"], p["intent"], p["terms"], p["shipDate"],
                    ("Actual ex-mill" if p["actualXmill"] else "Planned") if p["shipDate"] else None,
                    p["dueDate"], p["amount"] if p["amount"] is not None else "Pending",
-                   p["minAmount"], p["maxAmount"], p["status"]])
+                   p["minAmount"], p["maxAmount"], p["status"]] + arrival(p, today) + [p["millInvoice"]])
     last = ws.max_row
     for r in ws.iter_rows(min_row=2, max_row=last):
         for cell in r: cell.font = body
-        for i in (4, 6): r[i].number_format = "mmmm d, yyyy"; r[i].alignment = Alignment(horizontal="left")
+        for i in (4, 6, 11, 12): r[i].number_format = "mmmm d, yyyy"; r[i].alignment = Alignment(horizontal="left")
         for i in (7, 8, 9): r[i].number_format = '"$"#,##0.00'
     tr = last + 1
     ws.cell(tr, 7, "Total").font = Font(name="Aptos Display", bold=True)
@@ -311,9 +324,9 @@ def build_xlsx(path, today, rows, t):
         L = get_column_letter(col)
         cc = ws.cell(tr, col, "=SUM({0}2:{0}{1})".format(L, last))
         cc.font = Font(name="Aptos Display", bold=True); cc.number_format = '"$"#,##0.00'
-    for i, w in enumerate([30, 26, 15, 30, 20, 16, 20, 20, 16, 16, 20], 1):
+    for i, w in enumerate([30, 26, 15, 30, 20, 16, 20, 20, 16, 16, 20, 22, 20, 24, 30], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
-    ws.freeze_panes = "A2"; ws.auto_filter.ref = "A1:K{}".format(last)
+    ws.freeze_panes = "A2"; ws.auto_filter.ref = "A1:O{}".format(last)
     ws2 = wb.create_sheet("Summary")
     ws2.append(["Fabric Payment Schedule", "Report of " + friendly(today)])
     ws2["A1"].font = Font(name="Aptos Display", bold=True, size=14, color=PLUM[1:])
@@ -324,6 +337,11 @@ def build_xlsx(path, today, rows, t):
                    ("If mills ship 3% over", t["max"])]:
         ws2.append([lbl, v]); ws2.cell(ws2.max_row, 2).number_format = '"$"#,##0.00'
     ws2.append(["Lines without amount yet", t["pending"]])
+    ws2.append([])
+    for note in ["Fabric arrived (Monzini): the date the container reached Monzini (ETA Monzini from the forwarder's emails, today or earlier).",
+                 "Estimated arrival: for fabric not in yet, ETA Monzini from the forwarder; if there is none yet, the estimated port arrival (ETA port) - the basis column says which.",
+                 "Mill invoice #: the mill's own commercial invoice number (not our PO), read from the mill invoice on the container."]:
+        ws2.append([note])
     for r in ws2.iter_rows(min_row=3):
         for cell in r: cell.font = Font(name="Aptos Display")
     ws2.column_dimensions["A"].width = 30; ws2.column_dimensions["B"].width = 22
