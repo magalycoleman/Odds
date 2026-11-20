@@ -6,7 +6,8 @@
 //   page.html : the page code (ArtifactData collection "files", doc "index.html", field "text")
 //   app.css   : the page type's stylesheet (Artifact read path "artifact-type/app.css")
 //   data_dir  : one <dataset id>.json per dataset (the rows of each file in collection "datasets")
-// Makes: "Que se movio ayer - <D mon YYYY>.pdf" (Piso, Corte, Accesorios, Telas; no Historial)
+// Makes: "Reporte Diario de Fabrica - <D mon YYYY>.pdf" (renamed from "Que se movio ayer", Maggie, November 20, 2026)
+//         (Piso, Corte, Accesorios, Telas; no Historial)
 //        "Plan de embarque - <D mon YYYY>.pdf" (Plan tab only)
 const fs = require('fs'), path = require('path'), { execSync } = require('child_process');
 const [pagePath, cssPath, dataDir, outDir, day] = process.argv.slice(2);
@@ -73,7 +74,7 @@ window.addEventListener('load',()=>{
   fs.mkdirSync(outDir, { recursive: true });
   const b = await chromium.launch();
   const jobs = [
-    { tabs: ['hoy', 'corte-tab', 'avios-tab', 'telas-tab'], title: '¿Qué se movió ayer?', file: `Que se movio ayer - ${short}.pdf` },
+    { tabs: ['hoy', 'corte-tab', 'avios-tab', 'telas-tab'], title: 'Reporte Diario de Fábrica', file: `Reporte Diario de Fabrica - ${short}.pdf` },
     { tabs: ['plan'], title: 'Plan de embarque', file: `Plan de embarque - ${short}.pdf` },
   ];
   const errors = [];
